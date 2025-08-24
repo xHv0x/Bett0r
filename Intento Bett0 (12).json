@@ -1,0 +1,405 @@
+{
+  "name": "Intento Bett0",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are the Orchestrator (Bett0). You coordinate two tools:\n- \"Resolve Polymarket Tokens\": query/slug/id → returns a single market with token_ids.\n- \"Get Bid/Ask\": token_ids (YES,NO order) → returns current prices.\n\nTONE\n- Laid back, friendly, concise intro line before structured answers:\n  e.g., \"Cool — here you go 👇\" / \"Listo, aquí va 👇\".\n- If the user writes in Spanish, mirror the tone in Spanish.\n\nROUTING\nA) DIRECT PRICING (user asks odds for a specific market by title/slug/id):\n   1) Call \"Resolve Polymarket Tokens\".\n   2) On success, call \"Get Bid/Ask\".\n   3) On failure, ask for a clearer title/slug/id (one short question).\n\nB) DIRECT TOKEN IDS (user already provides token_ids):\n   - If user provides token_ids (Yes,No order, comma-separated, no spaces), call \"Get Bid/Ask\".\n\nC) AMBIGUOUS / BROAD REQUESTS (e.g., “most active”, “trending”, “sports”, “politics”, “crypto”, keywords without a specific market):\n   - Briefly explain you need a specific market.\n   - Ask exactly one clarifying question to obtain a title, slug, id, or token_ids.\n   - Examples of acceptable inputs:\n     • Exact market title\n     • Market slug\n     • Contract/condition id (0x…)\n     • token_ids in Yes,No order\n\nEXPLANATORY FORMAT (for a single market)\nFor the market \"<Market Title>\":\n\nOutcome: Yes\nBest bid (SELL): <bidY>\nBest ask (BUY): <askY>\nMidpoint: <midY>\n\nOutcome: No\nBest bid (SELL): <bidN>\nBest ask (BUY): <askN>\nMidpoint: <midN>\n\nThis implies the current odds are about <midY*100>% for \"<Market Title>\" and <midN*100>% against it.\n<contractId>\n\nCOMPACT MODE\n- If the user says \"compact\" or \"/raw\", reply in one line:\n  <Title> • Yes: bid <bidY> | ask <askY> | mid <midY> • No: bid <bidN> | ask <askN> | mid <midN> <contractId>\n\nRULES\n- Never invent token_ids. If missing/uncertain, ask exactly one clarifying question.\n- Midpoint = average(bid, ask), rounded to 3 decimals. Percentages = 1 decimal + “%”.\n- If any price is missing, print “—”.\n- Keep bilingual if the input is Spanish; preserve structure and numbers.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        144,
+        -96
+      ],
+      "id": "54c9fdee-5a4e-43b5-978f-b24180b91209",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        48,
+        96
+      ],
+      "id": "e50bd260-e5f6-443f-bd69-b22903249dfe",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "FzlhVec0QPzf29JE",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        176,
+        208
+      ],
+      "id": "c36c96e4-c3e3-4875-ad2e-67fef4537ee1",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "description": "Finds a Polymarket market and returns its CLOB token IDs (Yes/No) from Gamma or CLOB.\n",
+        "workflowId": {
+          "__rl": true,
+          "value": "mU7RUtdTvSCL94C0",
+          "mode": "list",
+          "cachedResultName": "Agent A"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('query', ``, 'string') }}",
+            "slug": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('slug', ``, 'string') }}",
+            "marketId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('marketId', ``, 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "marketId",
+              "displayName": "marketId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "slug",
+              "displayName": "slug",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        464,
+        144
+      ],
+      "id": "efeb4e84-3250-4640-9a8e-f3becc582b92",
+      "name": "Resolve Polymarket Tokens"
+    },
+    {
+      "parameters": {
+        "description": "Takes token IDs and returns best ask (BUY) and best bid (SELL) from the CLOB /prices endpoint.\n",
+        "workflowId": {
+          "__rl": true,
+          "value": "9zl5kl4rePXwE05p",
+          "mode": "list",
+          "cachedResultName": "Agent B"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "token_ids": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('token_ids', ``, 'string') }}"
+          },
+          "matchingColumns": [
+            "token_ids"
+          ],
+          "schema": [
+            {
+              "id": "token_ids",
+              "displayName": "token_ids",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        128
+      ],
+      "id": "d7214c15-dd62-476b-afdc-203ba8398a15",
+      "name": "Get Bid/Ask"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa/orchestrator",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -368,
+        -384
+      ],
+      "id": "08c849eb-cc31-47d5-959f-1b1d168cf269",
+      "name": "Webhook",
+      "webhookId": "fbb90538-40ca-48b5-851d-7d0fd186dd38"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "677e3cb7-83e0-47a6-ad25-29346d4a523a",
+              "name": "from",
+              "value": "={{$json[\"From\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "e407ecf5-e607-4958-8f69-c3d2ff06fbf3",
+              "name": "to",
+              "value": "={{$json[\"To\"]}}",
+              "type": "string"
+            },
+            {
+              "id": "48410a5f-4e1d-48a4-844c-2dce5bd1d570",
+              "name": "text",
+              "value": "={{$json[\"Body\"] || \"\"}}",
+              "type": "string"
+            },
+            {
+              "id": "3dbd1e7c-1384-4740-9ccb-43749a1bfa52",
+              "name": "name",
+              "value": "={{$json[\"ProfileName\"] || $json[\"WaId\"] || \"\"}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        -384
+      ],
+      "id": "f1f74433-42e1-4feb-a345-6a3c3d9a1242",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Inputs: 0 = Edit Fields (from,to,text,name), 1 = AI Agent output\nconst left  = $items(0,0)?.json || {};  // WA context\nconst agent = $items(1,0)?.json || {};  // Agent answer\n\n// Grab the Agent's final text defensively (covers common props)\nconst reply =\n  agent.text ??\n  agent.response ??\n  agent.output ??\n  agent.message ??\n  (typeof agent === 'string' ? agent : null) ??\n  (left.text ? `Recibí: ${left.text}` : \"Dime un mercado o envíame token_ids (YES,NO).\");\n\n// Send back to the original sender\nreturn [{ json: { to: left.from, reply } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        -320
+      ],
+      "id": "277cf6a4-d23b-449c-b1df-2a92d393285d",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/AC430aacd3e301d567507de6a401f9e8ea/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "From",
+              "value": "whatsapp:+14155238886"
+            },
+            {
+              "name": "To",
+              "value": "=={{$json[\"to\"]}}\n"
+            },
+            {
+              "name": "Body",
+              "value": "={{$json[\"reply\"]}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -320
+      ],
+      "id": "6f7412da-105b-4eff-81f9-5bc8dd2084a6",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "sLObNAjInO3R4I7u",
+          "name": "Twilio Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        48,
+        -384
+      ],
+      "id": "fa927e8b-9669-462c-b636-3c8eb485487f",
+      "name": "Respond to Webhook1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Polymarket Tokens": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Bid/Ask": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ab0757b0-92bc-4b02-bde9-e2f9a8723fc3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d014a1ddd04e0aa780bf720f85d38c7c96dc301f9d5aac038e20415227ce61bf"
+  },
+  "id": "lbIYJrhaq81uiU9N",
+  "tags": []
+}
