@@ -1,0 +1,224 @@
+{
+  "name": "Agent A",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "=https://clob.polymarket.com/markets/{{ $('Pick Market').first().json.market.condition_id || $('Pick Market').first().json.market.conditionId }}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        224
+      ],
+      "id": "177829f6-9103-4b82-9171-e0227f7b82cc",
+      "name": "CLOB Get Single Market"
+    },
+    {
+      "parameters": {
+        "url": "https://gamma-api.polymarket.com/markets",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "200"
+            },
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "closed",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        464,
+        352
+      ],
+      "id": "0195e0a1-0ba2-4ed9-a98c-d05992a63248",
+      "name": "Gamma Get Markets",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Pick Market — \"read by node name\" version\n * Nodes required (names exact):\n *  - Inputs               -> holds { query?: string, slug?: string, marketId?: string|number }\n *  - Gamma Get Markets    -> HTTP node hitting https://gamma-api.polymarket.com/markets\n *\n * Only wire:  Gamma Get Markets  --->  Pick Market\n * (Inputs does NOT need to be wired into Pick Market)\n */\n\n// ----- 1) Read Inputs and Gamma by node name -----\nconst input = $('Inputs').first()?.json ?? {};\n// Gamma with Split Into Items ON -> gather all items from that node\nconst gammaItems = $('Gamma Get Markets').all().map(i => i.json);\n\n// If your Gamma node does not split, fallback to first().json normalization:\nfunction normalizeMarkets(x) {\n  if (!x) return [];\n  if (Array.isArray(x)) return x;\n  if (Array.isArray(x.data)) return x.data;\n  if (Array.isArray(x.markets)) return x.markets;\n  if (Array.isArray(x.results)) return x.results;\n  if (x.id || x.slug || x.question || x.title) return [x];\n  return [];\n}\nlet marketObjs = [];\nif (gammaItems.length > 1) {\n  // split-into-items case: items are already individual markets\n  marketObjs = gammaItems.filter(j => j && j.id && (j.question || j.title || j.name) && j.slug);\n} else {\n  // single-item case: root is an array or object with array props\n  marketObjs = normalizeMarkets(gammaItems[0]);\n}\n\nif (!marketObjs.length) {\n  return [{ json: { error: 'No markets visible from Gamma Get Markets', _inputsSeen: Object.keys(input || {}) } }];\n}\n\n// ----- 2) Utilities -----\nconst lc   = s => (s == null ? '' : String(s)).toLowerCase();\nconst norm = s => lc(s).normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '');\nconst words= s => norm(s).split(/[^a-z0-9%]+/).filter(Boolean);\n\nfunction parseMaybeArray(x) {\n  if (Array.isArray(x)) return x;\n  if (typeof x === 'string') {\n    const t = x.trim();\n    if (t.startsWith('[') || t.startsWith('{')) {\n      try { const p = JSON.parse(t); return Array.isArray(p) ? p : (p ? [p] : []); } catch {}\n    }\n  }\n  return [];\n}\n\n// ----- 3) Query features -----\nconst qRaw  = String(input.query ?? '').trim();\nconst qNorm = norm(qRaw);\nconst base  = words(qNorm);\n\nconst phrases = [];\nif (qNorm) {\n  const quoted = qNorm.split(/[\"“”]+/).map(s => s.trim()).filter(Boolean);\n  if (qNorm.length <= 80) quoted.push(qNorm);\n  for (const p of quoted) if (p.length >= 4) phrases.push(p);\n}\n\nconst extra = [];\nif (base.some(t => ['yes','no','si','sí','over','under'].includes(t))) extra.push('yes','no','si','sí','over','under');\nif (base.includes('draw') || base.includes('empate')) extra.push('draw','empate');\nif (base.some(t => ['us','usa','states','america','united','estados','eeuu','ee.uu'].includes(t))) extra.push('us','usa','united states','america','estados unidos','eeuu','ee.uu');\nif (base.some(t => ['election','president','presidential','elección','elecciones','presidencial'].includes(t))) extra.push('election','president','presidential','elección','elecciones','presidencial');\n\nconst termSet    = Array.from(new Set([...base, ...extra])).slice(0, 24);\nconst numbers    = (qNorm.match(/\\b\\d+(?:\\.\\d+)?\\b/g) || []).slice(0, 6);\nconst dateTokens = (qNorm.match(/\\b(20\\d{2})(?:[-/\\.](0?[1-9]|1[0-2]))?(?:[-/\\.](0?[1-9]|[12]\\d|3[01]))?\\b/g) || []).slice(0, 3);\n\nconst slugQ = input.slug != null ? String(input.slug) : null;\nconst idQ   = input.marketId != null ? String(input.marketId) : null;\n\nconst isExactId   = m => idQ && (String(m.id) === idQ || String(m.conditionId || m.cid || m.condition_id) === idQ);\nconst isExactSlug = m => slugQ && String(m.slug) === slugQ;\n\nfunction haystack(m) {\n  const outs      = parseMaybeArray(m.outcomes);\n  const outsNames = parseMaybeArray(m.outcomesNames || m.outcomes_names);\n  const fields = [\n    m.slug, m.title, m.question, m.name,\n    m.category, m.categories,\n    ...(Array.isArray(m.tags) ? m.tags : []),\n    ...outs, ...outsNames,\n  ].filter(Boolean).map(x => Array.isArray(x) ? x.join(' ') : x);\n  return norm(fields.join(' | '));\n}\n\nfunction score(m) {\n  if (!m) return -1e9;\n  let s = 0;\n  if (isExactSlug(m)) s += 1000;\n  if (isExactId(m))   s += 1000;\n\n  const hay = haystack(m);\n  for (const p of phrases) if (hay.includes(p)) s += Math.min(20, Math.floor(p.length / 4));\n  if (base.length && base.every(t => hay.includes(t))) s += 12;\n  for (const t of termSet) if (hay.includes(t)) s += 2;\n  for (const n of numbers) if (hay.includes(n)) s += 3;\n  for (const d of dateTokens) if (hay.includes(d)) s += 4;\n\n  if (m.enableOrderBook || m.enable_order_book) s += 3;\n  if (m.closed === false) s += 2;\n  if (m.closed === true)  s -= 3;\n  return s;\n}\n\n// ----- 4) Prefer real/active markets with tokens & volume -----\nconst enriched = marketObjs.map(m => {\n  const tokenIds = parseMaybeArray(m.clobTokenIds || m.clob_token_ids);\n  const outs     = parseMaybeArray(m.outcomes || m.outcomesNames || m.outcomes_names);\n  const hasTokens= tokenIds.length >= 2 && outs.length === tokenIds.length;\n  const volNum   = Number(m.volumeNum ?? m.volume ?? 0) || 0;\n  return { m, _score: score(m), _hasTokens: hasTokens ? 1 : 0, _vol: volNum };\n}).sort((a,b) =>\n  (b._score - a._score) ||\n  (b._hasTokens - a._hasTokens) ||\n  (b._vol - a._vol)\n);\n\nconst best = enriched[0]?.m;\nif (!best) {\n  return [{ json: { error: 'No market matched', _query: qRaw || null } }];\n}\n\n// ----- 5) Extract tokens (Gamma returns JSON-encoded arrays)\nconst ids  = parseMaybeArray(best.clobTokenIds || best.clob_token_ids);\nconst outs = parseMaybeArray(best.outcomes      || best.outcomesNames || best.outcomes_names);\n\nlet gammaTokens = [];\nif (ids.length >= 2 && outs.length === ids.length) {\n  gammaTokens = ids.map((id, i) => {\n    let out = String(outs[i] ?? '').trim();\n    if (/^y(es)?$/i.test(out)) out = 'Yes';\n    else if (/^n(o)?$/i.test(out)) out = 'No';\n    else if (/^over$/i.test(out)) out = 'Over';\n    else if (/^under$/i.test(out)) out = 'Under';\n    else if (/^(draw|empate)$/i.test(out)) out = 'Draw';\n    return { token_id: String(id), outcome: out || 'Unknown' };\n  }).slice(0, 2);\n}\n\nconst needClobLookup = gammaTokens.length === 0;\n\nconst _debugTop = enriched.slice(0, 5).map(e => ({\n  id: e.m.id,\n  slug: e.m.slug,\n  q: e.m.question || e.m.title || e.m.name,\n  open: e.m.closed === false,\n  orderBook: e.m.enableOrderBook ?? e.m.enable_order_book,\n  score: e._score, hasTokens: !!e._hasTokens, vol: e._vol\n}));\n\nreturn [{\n  json: {\n    market: {\n      id: best.id,\n      conditionId: best.conditionId || best.condition_id || null,\n      slug: best.slug,\n      question: best.question || best.title || best.name || null,\n      closed: !!best.closed,\n      enableOrderBook: !!(best.enableOrderBook || best.enable_order_book),\n    },\n    gammaTokens,\n    needClobLookup,\n    _debugTop,\n    _query: qRaw || null,\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        352
+      ],
+      "id": "a335a65d-fa66-4a6f-b541-083e0ff1123f",
+      "name": "Pick Market"
+    },
+    {
+      "parameters": {
+        "jsCode": "const g = $('Pick Market').first().json.market || {};\nconst tokens = $('Pick Market').first().json.gammaTokens || [];\n\nreturn [{\n  json: {\n    market: {\n      id: g.id ?? g.market_id ?? null,\n      slug: g.slug ?? null,\n      question: g.question ?? g.title ?? null,\n      condition_id: g.condition_id ?? null,\n      enableOrderBook: Boolean(g.enableOrderBook ?? g.enable_order_book)\n    },\n    tokens\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        496
+      ],
+      "id": "069cf695-d83c-4051-878e-23a16047ef85",
+      "name": "Normalize from Gamma"
+    },
+    {
+      "parameters": {
+        "jsCode": "const g = $('Pick Market').first().json.market || {};\nconst clob = $json || {};\nconst m = clob.market ?? clob;\n\nconst raw = Array.isArray(m.tokens) ? m.tokens : [];\nconst tokens = raw.map(t => {\n  const id = String(t.token_id ?? t.tokenId ?? t.id ?? '');\n  let out = String(t.outcome ?? t.outcome_name ?? t.name ?? '').trim();\n  if (/^y(es)?$/i.test(out)) out = 'Yes';\n  else if (/^n(o)?$/i.test(out)) out = 'No';\n  return { token_id: id, outcome: out || 'Unknown' };\n}).slice(0,2).sort((a,b)=> (a.outcome === 'Yes' ? -1 : 1));\n\nreturn [{\n  json: {\n    market: {\n      id: g.id ?? g.market_id ?? null,\n      slug: g.slug ?? null,\n      question: g.question ?? g.title ?? null,\n      condition_id: m.condition_id ?? g.condition_id ?? null,\n      enableOrderBook: Boolean(g.enableOrderBook ?? g.enable_order_book)\n    },\n    tokens\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        368
+      ],
+      "id": "badde54b-6015-4f8e-b6bf-f1b859acbff6",
+      "name": "Normalize from CLOB"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "marketId"
+            },
+            {
+              "name": "slug"
+            }
+          ]
+        }
+      },
+      "id": "c055762a-8fe7-4141-a639-df2372f30060",
+      "typeVersion": 1.1,
+      "name": "Inputs",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        272,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "44ce487a-c9b5-4925-9b7f-ffe4cddbc898",
+              "leftValue": "={{$json.needClobLookup}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        352
+      ],
+      "id": "feaeb7ba-7cc6-4f93-8f07-d626207189ef",
+      "name": "Decide"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "CLOB Get Single Market": {
+      "main": [
+        [
+          {
+            "node": "Normalize from CLOB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gamma Get Markets": {
+      "main": [
+        [
+          {
+            "node": "Pick Market",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Market": {
+      "main": [
+        [
+          {
+            "node": "Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inputs": {
+      "main": [
+        [
+          {
+            "node": "Gamma Get Markets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "CLOB Get Single Market",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize from Gamma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "cfaa7f20-5fac-42b1-bd68-ecae004953e6",
+  "meta": {
+    "instanceId": "d014a1ddd04e0aa780bf720f85d38c7c96dc301f9d5aac038e20415227ce61bf"
+  },
+  "id": "mU7RUtdTvSCL94C0",
+  "tags": []
+}

@@ -1,0 +1,145 @@
+{
+  "name": "Agent B",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "token_ids"
+            }
+          ]
+        }
+      },
+      "id": "c055762a-8fe7-4141-a639-df2372f30060",
+      "typeVersion": 1.1,
+      "name": "Inputs",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -48,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = String(items[0].json.token_ids || \"\").trim();\nconst parts = raw.split(\",\").map(s => s.trim()).filter(Boolean);\nif (parts.length !== 2) throw new Error(`Expected \"token_ids\" like \"idYes,idNo\". Got: \"${raw}\"`);\nconst [yesId, noId] = parts;\nreturn [{ json: { yesId, noId, token_ids_raw: raw } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        608
+      ],
+      "id": "c3d64c2c-9758-4d1b-b8c5-eb1e9c33aa40",
+      "name": "Parse IDs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read ALL incoming items from ALL connections to input 0\nconst all = $input.all();                 // [{json: {...}}, {json: {...}}, ...]\nconst objs = all.map(i => i?.json || {});\n\n// unwrap possible wrappers and array-of-one\nfunction unwrap(x){\n  if (!x) return {};\n  let v = x;\n  if (Array.isArray(v)) v = v[0] || {};\n  if (v && typeof v === 'object') {\n    if (v.body && typeof v.body === 'object' && Object.keys(v.body).length) v = v.body;\n    if (v.data && typeof v.data === 'object' && Object.keys(v.data).length) v = v.data;\n  }\n  return v || {};\n}\nconst u = objs.map(unwrap);\n\n// find the prices map (object keyed by token_id with BUY/SELL inside)\nfunction looksLikePrices(o){\n  if (!o || typeof o !== 'object' || Array.isArray(o)) return false;\n  const ks = Object.keys(o);\n  if (!ks.length) return false;\n  return ks.some(k => {\n    const v = o[k];\n    return v && typeof v === 'object' && ('BUY' in v || 'SELL' in v || 'buy' in v || 'sell' in v);\n  });\n}\nlet priceMap = {};\nfor (const o of u) if (looksLikePrices(o)) { priceMap = o; break; }\nconst priceKeys = Object.keys(priceMap);\n\n// if we still don't see a map, bail with a helpful debug\nif (priceKeys.length < 2) {\n  return [{\n    json: {\n      quotes: [\n        { outcome: \"Yes\", bid: null, ask: null, mid: null },\n        { outcome: \"No\",  bid: null, ask: null, mid: null },\n      ],\n      debug: { reason: \"prices map not found\", itemsSeen: u.map(x => Object.keys(x)) }\n    }\n  }];\n}\n\n// find yesId/noId if present, else take first two keys in the map\nlet yesId = null, noId = null;\nfor (const o of u) {\n  if (o && typeof o === 'object' && o.yesId && o.noId) {\n    yesId = String(o.yesId).trim();\n    noId  = String(o.noId).trim();\n    break;\n  }\n}\nif (!yesId || !priceMap[yesId]) yesId = priceKeys[0];\nif (!noId  || !priceMap[noId])  noId  = priceKeys[1];\n\nconst toNum = v => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));\n// BUY = ask, SELL = bid (CLOB)\nconst pY = priceMap[yesId] || {};\nconst pN = priceMap[noId]  || {};\nconst yesAsk = toNum(pY.BUY  ?? pY.buy);\nconst yesBid = toNum(pY.SELL ?? pY.sell);\nconst noAsk  = toNum(pN.BUY  ?? pN.buy);\nconst noBid  = toNum(pN.SELL ?? pN.sell);\nconst mid = (b,a)=> (b!=null && a!=null) ? (b+a)/2 : null;\n\nreturn [{\n  json: {\n    quotes: [\n      { outcome: \"Yes\", token_id: yesId, bid: yesBid, ask: yesAsk, mid: mid(yesBid, yesAsk) },\n      { outcome: \"No\",  token_id: noId,  bid: noBid,  ask: noAsk,  mid: mid(noBid,  noAsk)  },\n    ],\n    debug: {\n      priceKeys: priceKeys.slice(0,6),\n      usedIds: { yesId, noId },\n      priceYes: priceMap[yesId] || null,\n      priceNo:  priceMap[noId]  || null\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        464
+      ],
+      "id": "88bd8d09-ae44-493f-a7a8-f1f67fe2cb51",
+      "name": "Shape Quotes"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Inputs from Parse IDs\nconst yesId = String($json.yesId || \"\").trim();\nconst noId  = String($json.noId  || \"\").trim();\nif (!yesId || !noId) throw new Error(`Missing token IDs. yesId=\"${yesId}\" noId=\"${noId}\"`);\n\n// canonical POST /prices payload (BUY=ask, SELL=bid)\nconst payload = {\n  params: [\n    { token_id: yesId, side: \"BUY\" },\n    { token_id: yesId, side: \"SELL\" },\n    { token_id: noId,  side: \"BUY\" },\n    { token_id: noId,  side: \"SELL\" },\n  ],\n};\n\nconst http = this.helpers.httpRequest;\n\n// primary: POST /prices\nasync function postPrices() {\n  return http({\n    method: \"POST\",\n    url: \"https://clob.polymarket.com/prices\",\n    headers: { Accept: \"application/json\" },\n    json: true,\n    body: payload,\n  });\n}\n\n// fallback: GET /price (lowercase side)\nasync function getPrice(token_id, sideLower) {\n  try {\n    const r = await http({\n      method: \"GET\",\n      url: \"https://clob.polymarket.com/price\",\n      qs: { token_id, side: sideLower },\n      json: true,\n      headers: { Accept: \"application/json\" },\n    });\n    return r?.price != null ? String(r.price) : null;\n  } catch { return null; }\n}\n\nlet map;\ntry {\n  map = await postPrices();  // expected: { \"<id>\": { BUY:\"..\", SELL:\"..\" }, \"<id>\": ... }\n} catch {\n  // build the same shape via 4× GET /price\n  const yBuy  = await getPrice(yesId, \"buy\");\n  const ySell = await getPrice(yesId, \"sell\");\n  const nBuy  = await getPrice(noId,  \"buy\");\n  const nSell = await getPrice(noId,  \"sell\");\n  map = {};\n  map[yesId] = { BUY: yBuy,  SELL: ySell };\n  map[noId]  = { BUY: nBuy,  SELL: nSell };\n}\n\n// IMPORTANT: return ONLY {json: ...}\nreturn [{ json: map }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        352
+      ],
+      "id": "dc00cc79-c5eb-494c-ba62-9121d1a715d9",
+      "name": "Prices (POST)."
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        512,
+        480
+      ],
+      "id": "4170caa3-b84c-4b73-96f9-cd9ab061f361",
+      "name": "Merge"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Inputs": {
+      "main": [
+        [
+          {
+            "node": "Parse IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse IDs": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          },
+          {
+            "node": "Prices (POST).",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prices (POST).": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Quotes": {
+      "main": [
+        []
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Shape Quotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c30af208-3e4f-4ad7-9a45-2879b5336369",
+  "meta": {
+    "instanceId": "d014a1ddd04e0aa780bf720f85d38c7c96dc301f9d5aac038e20415227ce61bf"
+  },
+  "id": "9zl5kl4rePXwE05p",
+  "tags": []
+}
